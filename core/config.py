@@ -13,3 +13,7 @@ OVERLAP = 20
 
 #Model
 EMBEDDING_MODEL_NAME = "all-mpnet-base-v2"
+
+
+#Best accuracy model
+#bge-large-en-v1.5
