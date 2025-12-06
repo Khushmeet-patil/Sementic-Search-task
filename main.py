@@ -26,14 +26,27 @@ def load_embedding_model():
     """Load the embedding model once."""
     return EmbeddingGenerator(config.EMBEDDING_MODEL_NAME)
 
-def process_documents(model, chunk_size, overlap):
+def process_documents(model, chunk_size, overlap, source_type="default", custom_docs=None):
     """Load, chunk, and embed documents."""
-    with st.spinner("Loading documents..."):
-        raw_docs = loader.load_documents(config.DOCS_DIR)
     
-    if not raw_docs:
-        st.error(f"No .txt files found in {config.DOCS_DIR}")
-        return
+    # Clear previous state to avoid mixing data
+    st.session_state.chunks = []
+    st.session_state.metadatas = []
+    st.session_state.doc_embeddings = np.array([])
+    st.session_state.documents_loaded = False
+    
+    raw_docs = []
+    if source_type == "default":
+        with st.spinner("Loading default documents..."):
+            raw_docs = loader.load_documents(config.DOCS_DIR)
+            if not raw_docs:
+                st.error(f"No .txt files found in {config.DOCS_DIR}")
+                return
+    elif source_type == "custom":
+        if not custom_docs:
+             st.error("No custom documents provided.")
+             return
+        raw_docs = custom_docs
 
     all_chunks = []
     all_metadatas = []
@@ -47,11 +60,12 @@ def process_documents(model, chunk_size, overlap):
             all_chunks.append(chunk_text)
             all_metadatas.append({
                 "filename": doc['filename'],
-                "chunk_id": chunk_id
+                "chunk_id": chunk_id,
+                "source": source_type # Track source
             })
         progress_bar.progress((i + 1) / total_docs)
         
-    st.write(f"Generated {len(all_chunks)} chunks from {total_docs} files.")
+    st.write(f"Generated {len(all_chunks)} chunks from {total_docs} files ({source_type}).")
     
     with st.spinner("Generating embeddings... (this may take a moment)"):
         embeddings = model.generate_embeddings(all_chunks)
@@ -67,33 +81,56 @@ def process_documents(model, chunk_size, overlap):
     st.session_state.metadatas = all_metadatas
     st.session_state.doc_embeddings = embeddings
     st.session_state.documents_loaded = True
-    st.success("Indexing complete!")
+    st.success(f"Indexing complete! ({source_type} data)")
 
 def main():
     st.title("🔍 Semantic Search Engine")
     st.markdown("""
     This application allows you to search through text documents using semantic meaning rather than just keyword matching.
     
-    **How it works:**
-    1. Documents are loaded from the `docs/` folder.
-    2. Text is split into overlapping chunks.
-    3. Embeddings are generated using a Transformer model.
-    4. Your query is compared against all chunks using Cosine Similarity.
+    ### **How to Use:**
+    1.  **Select Data Source (Sidebar):**
+        *   **Default Docs:** Uses pre-loaded files from the `docs/` folder.
+        *   **Custom Upload:** Allows you to upload your own `.txt` files.
+    2.  **Load Data:** Click the **"Load & Index"** or **"Process Custom Data"** button in the sidebar.
+    3.  **Search:** Enter your question in the search bar below to find relevant answers.
+    
+    ### **How it Works:**
+    1.  **Chunking:** Text is split into small, overlapping segments.
+    2.  **Embedding:** A Transformer model converts text into numerical vectors (meanings).
+    3.  **Indexing:** Vectors are stored in memory or ChromaDB for fast retrieval.
+    4.  **Similarity Search:** Your query is converted to a vector and compared against the database to find the closest matches.
     """)
     
-    #Sidebar 
+    # Sidebar 
     with st.sidebar:
         st.header("Configuration")
         st.info(f"Model: {config.EMBEDDING_MODEL_NAME}")
+        
+        # 1. Select Data Source
+        data_source = st.radio("Data Source", ["Default Docs", "Custom Upload"])
         
         chunk_size = st.slider("Chunk Size", min_value=10, max_value=200, value=config.CHUNK_SIZE, step=10)
         overlap = st.slider("Overlap", min_value=0, max_value=100, value=config.OVERLAP, step=5)
         
         st.session_state.use_chroma = st.checkbox("Use Vector Database (ChromaDB)", value=False)
-
-        if st.button("Load & Index Documents"):
-            model = load_embedding_model()
-            process_documents(model, chunk_size, overlap)
+        
+        if data_source == "Default Docs":
+            if st.button("Load & Index Default Docs"):
+                model = load_embedding_model()
+                process_documents(model, chunk_size, overlap, source_type="default")
+        
+        else: # Custom Upload
+            uploaded_files = st.file_uploader("Upload .txt files", type=['txt'], accept_multiple_files=True)
+            if uploaded_files and st.button("Process Custom Data"):
+                model = load_embedding_model()
+                # Create a pseudo-loader for uploaded files
+                raw_docs = []
+                for uploaded_file in uploaded_files:
+                    string_data = uploaded_file.getvalue().decode("utf-8")
+                    raw_docs.append({"filename": uploaded_file.name, "content": string_data})
+                
+                process_documents(model, chunk_size, overlap, source_type="custom", custom_docs=raw_docs)
             
     #Mian Interface
     if st.session_state.documents_loaded:
