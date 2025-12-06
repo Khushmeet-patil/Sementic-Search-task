@@ -3,6 +3,9 @@ import os
 # Project Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS_DIR = os.path.join(BASE_DIR, "docs")
+CHROMA_DB_DIR = os.path.join(BASE_DIR, "chroma_db")
+COLLECTION_NAME = "documents_collection"
+
 
 
 CHUNK_SIZE = 100  

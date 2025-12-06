@@ -4,3 +4,5 @@ scikit-learn
 numpy
 torch
 tf-keras
+chromadb
+

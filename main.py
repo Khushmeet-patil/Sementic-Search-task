@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import numpy as np
-from core import config, loader, chunker, search
+from core import config, loader, chunker, search, vectordb
 from core.embeddings import EmbeddingGenerator
 
 # Page title
@@ -55,7 +55,14 @@ def process_documents(model, chunk_size, overlap):
     
     with st.spinner("Generating embeddings... (this may take a moment)"):
         embeddings = model.generate_embeddings(all_chunks)
-        
+
+    if st.session_state.use_chroma:
+        with st.spinner("Indexing into ChromaDB..."):
+            chroma_handler = vectordb.ChromaDBHandler()
+            chroma_handler.reset() # Reset for fresh index on load
+            chroma_handler.add_documents(all_chunks, all_metadatas, embeddings)
+            st.session_state.chroma_handler = chroma_handler # Keep handler in session
+    
     st.session_state.chunks = all_chunks
     st.session_state.metadatas = all_metadatas
     st.session_state.doc_embeddings = embeddings
@@ -82,6 +89,8 @@ def main():
         chunk_size = st.slider("Chunk Size", min_value=10, max_value=200, value=config.CHUNK_SIZE, step=10)
         overlap = st.slider("Overlap", min_value=0, max_value=100, value=config.OVERLAP, step=5)
         
+        st.session_state.use_chroma = st.checkbox("Use Vector Database (ChromaDB)", value=False)
+
         if st.button("Load & Index Documents"):
             model = load_embedding_model()
             process_documents(model, chunk_size, overlap)
@@ -94,20 +103,54 @@ def main():
             model = load_embedding_model()
             with st.spinner("Searching..."):
                 query_embedding = model.generate_embeddings([query])[0]
-                top_indices = search.search(query_embedding, st.session_state.doc_embeddings, top_k=3)
                 
-            st.subheader("Top Results")
-            for rank, idx in enumerate(top_indices):
-                score = np.dot(query_embedding, st.session_state.doc_embeddings[idx]) # Re-calculating score for display since search returns only indices
-                # Note: search.py uses sklearn cosine_similarity which returns 1.0 for identical vectors.
-                # Since we normalized embeddings, dot product is equivalent to cosine similarity.
+                if st.session_state.get('use_chroma', False):
+                    # ChromaDB Search
+                    if 'chroma_handler' not in st.session_state:
+                         st.session_state.chroma_handler = vectordb.ChromaDBHandler()
+                    
+                    results = st.session_state.chroma_handler.query(query_embedding, n_results=3)
+                    
+                    # ChromaDB structure: {'ids': [[]], 'distances': [[]], 'metadatas': [[]], 'documents': [[]]}
+                    # We need to parse this back to our format. 
+                    # Note: Chroma returns distances, not scores (unless we did 1-dist). 
+                    # But wait, we used 'cosine' space, so it returns cosine distance (1 - similarity).
+                    
+                    # Let's map it.
+                    top_indices = [] # Not really using indices here directly, but filling lists.
+                    
+                    # We can iterate through the results directly
+                    found_chunks = results['documents'][0]
+                    found_metadatas = results['metadatas'][0]
+                    found_distances = results['distances'][0]
+                    
+                    st.subheader("Top Results (ChromaDB)")
+                    for i in range(len(found_chunks)):
+                        score = 1 - found_distances[i] # Approximate similarity
+                        
+                        chunk_text = found_chunks[i]
+                        metadata = found_metadatas[i]
+                        
+                        with st.expander(f"Result {i+1} (Score: {score:.4f}) - {metadata['filename']}"):
+                            st.markdown(f"**Chunk ID:** {metadata['chunk_id']}")
+                            st.markdown(f"**Text:**\n\n{chunk_text}")
+
+                else:
+                    # Original Numpy Search
+                    top_indices = search.search(query_embedding, st.session_state.doc_embeddings, top_k=3)
                 
-                chunk_text = st.session_state.chunks[idx]
-                metadata = st.session_state.metadatas[idx]
-                
-                with st.expander(f"Result {rank+1} (Score: {score:.4f}) - {metadata['filename']}"):
-                    st.markdown(f"**Chunk ID:** {metadata['chunk_id']}")
-                    st.markdown(f"**Text:**\n\n{chunk_text}")
+                    st.subheader("Top Results")
+                    for rank, idx in enumerate(top_indices):
+                        score = np.dot(query_embedding, st.session_state.doc_embeddings[idx]) # Re-calculating score for display since search returns only indices
+                        # Note: search.py uses sklearn cosine_similarity which returns 1.0 for identical vectors.
+                        # Since we normalized embeddings, dot product is equivalent to cosine similarity.
+                        
+                        chunk_text = st.session_state.chunks[idx]
+                        metadata = st.session_state.metadatas[idx]
+                        
+                        with st.expander(f"Result {rank+1} (Score: {score:.4f}) - {metadata['filename']}"):
+                            st.markdown(f"**Chunk ID:** {metadata['chunk_id']}")
+                            st.markdown(f"**Text:**\n\n{chunk_text}")
     else:
         st.warning("Please load documents using the sidebar button to start searching.")
 

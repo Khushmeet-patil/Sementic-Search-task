@@ -1,1 +1,5 @@
 /venv
+*.pyc
+chroma_db/
+.vscode/
+.idea/
